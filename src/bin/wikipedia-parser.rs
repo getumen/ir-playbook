@@ -1,60 +1,95 @@
-extern crate quick_xml;
+extern crate xml;
 
-use std::env;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::str::from_utf8;
+use std::io::{BufReader, BufWriter};
+use std::io::Write;
 
-use bzip2::bufread::BzDecoder;
+use bzip2::Compression;
 use bzip2::read::MultiBzDecoder;
-use quick_xml::events::Event;
-use quick_xml::Reader;
+use bzip2::write::BzEncoder;
+use xml::EventReader;
+use xml::reader::XmlEvent;
 
 fn main() {
-    let file_name = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
+    let in_name = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
+    let out_file = std::env::var("HOME").unwrap() + "/wikipedia-trec.xml.bz2";
 
-    let file = File::open(file_name).expect("fail to open file");
-    let reader = BufReader::new(file);
+    let reader = File::open(in_name).expect("fail to open file");
+    let reader = BufReader::new(reader);
     let reader = MultiBzDecoder::new(reader);
     let reader = BufReader::new(reader);
+    let reader = EventReader::new(reader);
 
-    let mut reader = Reader::from_reader(reader);
+    let writer = File::create(out_file).expect("fail to open file");
+    let writer = BufWriter::new(writer);
+    let writer = BzEncoder::new(writer, Compression::best());
+    let mut writer = BufWriter::new(writer);
 
     let mut count = 0;
     let mut txt = String::new();
-    let mut buf = Vec::new();
+    let mut in_revision = false;
 
-    loop {
-        match reader.read_event(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                match e.name() {
-                    b"title" => txt.clear(),
-                    b"text" => txt.clear(),
-                    _ => (),
+    let mut id = String::new();
+    let mut title = String::new();
+    let mut text = String::new();
+
+    for e in reader {
+        match e {
+            Ok(XmlEvent::StartElement { name, .. }) => {
+                match name.local_name.as_str() {
+                    "id" => {
+                        txt.clear();
+                    }
+                    "title" => {
+                        txt.clear();
+                    }
+                    "text" => {
+                        txt.clear();
+                    }
+                    "revision" => {
+                        in_revision = true;
+                    }
+                    _ => {}
                 }
             }
-            Ok(Event::End(ref e)) => {
-                match e.name() {
-                    b"title" => println!("title: {}", txt),
-                    b"text" => println!("text: {}", txt),
-                    b"page" => {
+            Ok(XmlEvent::EndElement { name }) => {
+                match name.local_name.as_str() {
+                    "id" => {
+                        if !in_revision {
+                            id = txt.clone();
+                        }
+                    }
+                    "title" => {
+                        title = txt.clone();
+                    }
+                    "text" => {
+                        text = txt.clone();
+                    }
+                    "page" => {
+                        writeln!(writer, "<DOC>").unwrap();
+
+                        writeln!(writer, "<DOCNO>{}</DOCNO>", id).unwrap();
+                        writeln!(writer, "<HEADLINE>{}</HEADLINE>", title).unwrap();
+                        writeln!(writer, "<P>{}</P>", text).unwrap();
+
+                        writeln!(writer, "</DOC>").unwrap();
                         count += 1
                     }
-                    _ => (),
+                    "revision" => {
+                        in_revision = false;
+                    }
+                    _ => {}
                 }
             }
-            Ok(Event::Text(e)) =>
-                txt.push_str(
-                    e
-                        .unescape_and_decode(&reader)
-                        .expect("fail to decode")
-                        .as_str()),
-            Ok(Event::Eof) => break, // exits the loop when reaching end of file
-            Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
-            _ => (), // There are several other `Event`s we do not consider here
+            Ok(XmlEvent::Characters(s)) =>
+                txt.push_str(s.as_str()),
+            Err(e) => {
+                println!("Error: {}", e);
+                break;
+            }
+            _ => {}
         }
-
-        // if we don't keep a borrow elsewhere, we can clear the buffer to keep memory usage low
-        buf.clear();
     }
+
+    println!("finish write {} pages", count);
 }
