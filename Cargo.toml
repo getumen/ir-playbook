@@ -8,4 +8,4 @@ version = "0.1.0"
 
 [dependencies]
 bzip2 = "0.4"
-xml-rs = "0.8"
+soup = "0.5.0"
