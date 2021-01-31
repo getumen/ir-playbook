@@ -1,7 +1,10 @@
+extern crate rayon;
 extern crate soup;
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Cursor, Read, Write};
+use std::sync::mpsc;
+use std::thread;
 
 use bzip2::bufread::{BzDecoder, MultiBzDecoder};
 use bzip2::Compression;
@@ -27,6 +30,22 @@ fn main() {
 
     let mut last_offset = 0;
 
+    let pool = rayon::ThreadPoolBuilder::new()
+        .build()
+        .unwrap();
+
+    let (tx, rx) = mpsc::channel();
+
+    let sink = thread::spawn(move || {
+        for (id, title, text) in rx {
+            writeln!(writer, "<DOC>").unwrap();
+            writeln!(writer, "<DOCNO>{}</DOCNO>", id).unwrap();
+            writeln!(writer, "<HEADLINE>{}</HEADLINE>", title).unwrap();
+            writeln!(writer, "<P>{}</P>", text).unwrap();
+            writeln!(writer, "</DOC>").unwrap();
+        }
+    });
+
     for line in index_reader.lines() {
         let line = line.expect("read line");
 
@@ -38,30 +57,33 @@ fn main() {
         }
 
         let mut buf = vec![0u8; chunk];
+
+        let tx_clone = mpsc::Sender::clone(&tx);
+
         data_reader.read_exact(&mut buf).unwrap();
 
-        let reader = Cursor::new(buf);
-        let reader = BzDecoder::new(reader);
-        let reader = BufReader::new(reader);
-        let reader = Soup::from_reader(reader);
-        if reader.is_err() {
-            println!("chunk err from {} to {}", last_offset, offset);
-            continue;
-        }
-        let reader = reader.unwrap();
+        pool.spawn(move || {
+            let reader = Cursor::new(buf);
+            let reader = BzDecoder::new(reader);
+            let reader = BufReader::new(reader);
+            let reader = Soup::from_reader(reader);
+            if reader.is_err() {
+                println!("chunk err from {} to {}", last_offset, offset);
+                return;
+            }
+            let reader = reader.unwrap();
 
-        for page in reader.tag("page").find_all() {
-            let id = page.tag("id").find().expect("id").text();
-            let title = page.tag("title").find().expect("title").text();
-            let text = page.tag("text").find().expect("text").text();
+            for page in reader.tag("page").find_all() {
+                let id = page.tag("id").find().expect("id").text();
+                let title = page.tag("title").find().expect("title").text();
+                let text = page.tag("text").find().expect("text").text();
 
-            writeln!(writer, "<DOC>").unwrap();
-            writeln!(writer, "<DOCNO>{}</DOCNO>", id).unwrap();
-            writeln!(writer, "<HEADLINE>{}</HEADLINE>", title).unwrap();
-            writeln!(writer, "<P>{}</P>", text).unwrap();
-            writeln!(writer, "</DOC>").unwrap();
-        }
+                tx_clone.send((id, title, text)).unwrap();
+            }
+        });
 
         last_offset = offset;
     }
+
+    sink.join().unwrap();
 }
