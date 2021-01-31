@@ -12,6 +12,8 @@ use bzip2::write::BzEncoder;
 use soup::{NodeExt, QueryBuilderExt, Soup};
 
 fn main() {
+    let max_task_size = 16;
+
     let data_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
     let index_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream-index.txt.bz2";
     let out_file = std::env::var("HOME").unwrap() + "/wikipedia-trec.xml.bz2";
@@ -35,14 +37,18 @@ fn main() {
         .unwrap();
 
     let (tx, rx) = mpsc::channel();
+    let (sync_tx, sync_rx) = mpsc::sync_channel(max_task_size);
 
     let sink = thread::spawn(move || {
-        for (id, title, text) in rx {
-            writeln!(writer, "<DOC>").unwrap();
-            writeln!(writer, "<DOCNO>{}</DOCNO>", id).unwrap();
-            writeln!(writer, "<HEADLINE>{}</HEADLINE>", title).unwrap();
-            writeln!(writer, "<P>{}</P>", text).unwrap();
-            writeln!(writer, "</DOC>").unwrap();
+        for v in rx {
+            for (id, title, text) in v {
+                writeln!(writer, "<DOC>").unwrap();
+                writeln!(writer, "<DOCNO>{}</DOCNO>", id).unwrap();
+                writeln!(writer, "<HEADLINE>{}</HEADLINE>", title).unwrap();
+                writeln!(writer, "<P>{}</P>", text).unwrap();
+                writeln!(writer, "</DOC>").unwrap();
+            }
+            sync_rx.recv().unwrap();
         }
     });
 
@@ -56,10 +62,10 @@ fn main() {
             continue;
         }
 
+        sync_tx.send(0).unwrap();
+
         let mut buf = vec![0u8; chunk];
-
         let tx_clone = mpsc::Sender::clone(&tx);
-
         data_reader.read_exact(&mut buf).unwrap();
 
         pool.spawn(move || {
@@ -73,13 +79,17 @@ fn main() {
             }
             let reader = reader.unwrap();
 
+            let mut v = Vec::new();
+
             for page in reader.tag("page").find_all() {
                 let id = page.tag("id").find().expect("id").text();
                 let title = page.tag("title").find().expect("title").text();
                 let text = page.tag("text").find().expect("text").text();
 
-                tx_clone.send((id, title, text)).unwrap();
+                v.push((id, title, text));
             }
+
+            tx_clone.send(v).unwrap();
         });
 
         last_offset = offset;
