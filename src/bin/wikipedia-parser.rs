@@ -1,3 +1,4 @@
+extern crate num_cpus;
 extern crate rayon;
 extern crate soup;
 
@@ -12,8 +13,6 @@ use bzip2::write::BzEncoder;
 use soup::{NodeExt, QueryBuilderExt, Soup};
 
 fn main() {
-    let max_task_size = 16;
-
     let data_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
     let index_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream-index.txt.bz2";
     let out_file = std::env::var("HOME").unwrap() + "/wikipedia-trec.xml.bz2";
@@ -32,12 +31,14 @@ fn main() {
 
     let mut last_offset = 0;
 
+    let num = num_cpus::get();
+
     let pool = rayon::ThreadPoolBuilder::new()
         .build()
         .unwrap();
 
     let (tx, rx) = mpsc::channel();
-    let (sync_tx, sync_rx) = mpsc::sync_channel(max_task_size);
+    let (sync_tx, sync_rx) = mpsc::sync_channel(4 * num);
 
     let sink = thread::spawn(move || {
         for v in rx {
@@ -90,10 +91,14 @@ fn main() {
             }
 
             tx_clone.send(v).unwrap();
+
+            drop(tx_clone);
         });
 
         last_offset = offset;
     }
+
+    drop(tx);
 
     sink.join().unwrap();
 }
