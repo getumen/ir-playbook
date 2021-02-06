@@ -3,39 +3,33 @@ extern crate rayon;
 extern crate soup;
 
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::sync::mpsc;
 use std::thread;
 
-use bzip2::bufread::{BzDecoder, MultiBzDecoder};
-use bzip2::Compression;
-use bzip2::write::BzEncoder;
+use bzip2::bufread::BzDecoder;
 use soup::{NodeExt, QueryBuilderExt, Soup};
 
+use ir_playbook::ir;
+
 fn main() {
-    let data_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
-    let index_file = std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream-index.txt.bz2";
+    let data_file =
+        std::env::var("HOME").unwrap() + "/enwiki-20210120-pages-articles-multistream.xml.bz2";
+    let index_file = std::env::var("HOME").unwrap()
+        + "/enwiki-20210120-pages-articles-multistream-index.txt.bz2";
     let out_file = std::env::var("HOME").unwrap() + "/wikipedia-trec.xml.bz2";
 
-    let index_reader = File::open(index_file).expect("fail to open index file");
-    let index_reader = BufReader::new(index_reader);
-    let index_reader = MultiBzDecoder::new(index_reader);
-    let index_reader = BufReader::new(index_reader);
+    let index_reader = ir::files::get_multi_bz_reader(index_file).unwrap();
 
     let mut data_reader = File::open(data_file).expect("fail to open data file");
 
-    let writer = File::create(out_file).expect("fail to open file");
-    let writer = BufWriter::new(writer);
-    let writer = BzEncoder::new(writer, Compression::best());
-    let mut writer = BufWriter::new(writer);
+    let mut writer = ir::files::get_bz_writer(out_file).unwrap();
 
     let mut last_offset = 0;
 
     let num = num_cpus::get();
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .build()
-        .unwrap();
+    let pool = rayon::ThreadPoolBuilder::new().build().unwrap();
 
     let (tx, rx) = mpsc::channel();
     let (sync_tx, sync_rx) = mpsc::sync_channel(4 * num);
