@@ -1,4 +1,3 @@
-extern crate num_cpus;
 extern crate rayon;
 extern crate soup;
 
