@@ -1,9 +1,11 @@
 extern crate rayon;
-extern crate regex;
+extern crate sled;
 extern crate soup;
 
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::io::Write;
+use std::path::Path;
 use std::thread;
 
 use ir_playbook::ir;
@@ -14,14 +16,23 @@ fn main() {
     let index_file = std::env::var("HOME").unwrap()
         + "/enwiki-20210120-pages-articles-multistream-index.txt.bz2";
     let out_file = std::env::var("HOME").unwrap() + "/wikipedia-freq.csv.bz2";
+    let file_name = "/tmp/token-counter";
 
     let mut writer = ir::files::get_bz_writer(out_file).unwrap();
 
     let rx = ir::data_producer::get_wikipedia_producer(index_file, data_file, 16).unwrap();
 
     let sink = thread::spawn(move || {
-        let mut map: HashMap<String, i64> = HashMap::new();
+        let tree = sled::Config::default()
+            .path(file_name)
+            .create_new(true)
+            .cache_capacity(1024 * 1024)
+            .flush_every_ms(Some(1000))
+            .temporary(true)
+            .open()
+            .unwrap();
 
+        let mut map: HashMap<String, i64> = HashMap::new();
         for v in rx {
             for wikipedia_page in v {
                 for t in tokenizer(wikipedia_page.title) {
@@ -38,10 +49,32 @@ fn main() {
                     };
                     map.insert(t, count + 1);
                 }
+
+                let mut batch = sled::Batch::default();
+
+                for e in map.iter() {
+                    let count = match tree.get(e.0.as_str()) {
+                        Ok(Some(count_bytes)) => {
+                            let (int_bytes, _) = count_bytes.split_at(std::mem::size_of::<i64>());
+                            i64::from_le_bytes(int_bytes.try_into().unwrap())
+                        }
+                        Ok(None) => 0,
+                        Err(e) => panic!(e),
+                    };
+                    batch.insert(e.0.as_str(), sled::IVec::from(&(count + e.1).to_le_bytes()));
+                }
+                map.clear();
+                tree.apply_batch(batch).unwrap();
             }
         }
-        for e in map.iter() {
-            writeln!(writer, "{},{}", e.0, e.1).unwrap();
+
+        for e in tree.iter() {
+            let (key, value) = e.unwrap();
+            writeln!(writer,
+                     "{},{}",
+                     std::str::from_utf8(key.as_ref()).unwrap(),
+                     i64::from_le_bytes(value.split_at(std::mem::size_of::<i64>()).0.try_into().unwrap())
+            ).unwrap();
         }
     });
 
