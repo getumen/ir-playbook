@@ -9,8 +9,6 @@ use std::sync::mpsc;
 use bzip2::bufread::BzDecoder;
 use soup::{NodeExt, QueryBuilderExt, Soup};
 
-use crate::ir::entity::WikipediaPage;
-
 use super::entity;
 use super::files;
 
@@ -61,7 +59,7 @@ pub fn get_wikipedia_producer<P: 'static + AsRef<Path>>(
                     let id = page.tag("id").find().expect("id").text();
                     let title = page.tag("title").find().expect("title").text();
                     let content = page.tag("text").find().expect("text").text();
-                    v.push(WikipediaPage { id, title, content });
+                    v.push(entity::WikipediaPage { id, title, content });
                 }
                 tx_clone.send(v).unwrap();
                 drop(tx_clone);

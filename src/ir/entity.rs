@@ -4,3 +4,4 @@ pub struct WikipediaPage {
     pub title: String,
     pub content: String,
 }
+
